@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
-	"reflect"
 	"sort"
 )
 
@@ -15,63 +14,71 @@ var notFoundErr = "Not found error!"
 var badMethodErr = "Bad method error!"
 var badTaskErr = "Bad task error!"
 var extraFieldErr = "Extra field error!"
+var typeErr = "Type mismatch!"
 
 type Request struct {
-	Task    string                 `json:"task"`
-	Numbers []int                  `json:"numbers"`
-	X       map[string]interface{} `json:"-"`
+	Task interface{}            `json:"task"`
+	X    map[string]interface{} `json:"-"`
 }
 
-type FloatRequest struct {
-	Task    string                 `json:"task"`
-	Numbers []interface{}          `json:"numbers"`
-	X       map[string]interface{} `json:"-"`
+type SliceRequest struct {
+	Request
+	Numbers []interface{} `json:"numbers"`
 }
 
-type MeanResponse struct {
-	Task    string  `json:"task"`
-	Numbers []int   `json:"numbers"`
-	Answer  float64 `json:"answer"`
-	Code    int     `json:"code"`
-	Message string  `json:"message"`
+type NotSliceRequest struct {
+	Request
+	Numbers interface{} `json:"numbers"`
 }
 
-func NewMeanResponse(task, message string, numbers []int, answer float64, code int) *MeanResponse {
-	mr := new(MeanResponse)
+type BaseResponse struct {
+	Task    string        `json:"task"`
+	Numbers []interface{} `json:"numbers"`
+}
+
+func NewBaseResponse(task string, numbers []interface{}) *BaseResponse {
+	mr := new(BaseResponse)
 	mr.Task = task
 	mr.Numbers = numbers
-	mr.Answer = answer
-	mr.Code = code
-	mr.Message = message
 	return mr
 }
 
-type SortResponse struct {
-	Task    string `json:"task"`
-	Numbers []int  `json:"numbers"`
-	Answer  []int  `json:"answer"`
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+type SavedResponse struct {
+	BaseResponse
+	Answer interface{} `json:"answer"`
 }
 
-func NewSortResponse(task, message string, numbers, answer []int, code int) *SortResponse {
-	mr := new(SortResponse)
+func NewSavedResponse(task string, numbers []interface{}, answer interface{}) *SavedResponse {
+	mr := new(SavedResponse)
 	mr.Task = task
 	mr.Numbers = numbers
 	mr.Answer = answer
+	return mr
+}
+
+type Response struct {
+	SavedResponse
+	Message string `json:"message"`
+	Code    int    `json:"code"`
+}
+
+func NewResponse(task, message string, numbers []interface{}, answer interface{}, code int) *Response {
+	mr := new(Response)
+	mr.Task = task
+	mr.Numbers = numbers
 	mr.Code = code
 	mr.Message = message
+	mr.Answer = answer
 	return mr
 }
 
 type BadResponse struct {
-	Task    string `json:"task"`
-	Numbers []int  `json:"numbers"`
-	Code    int    `json:"code"`
+	BaseResponse
 	Message string `json:"message"`
+	Code    int    `json:"code"`
 }
 
-func NewBadResponse(task, message string, numbers []int, code int) *BadResponse {
+func NewBadResponse(task, message string, numbers []interface{}, code int) *BadResponse {
 	mr := new(BadResponse)
 	mr.Task = task
 	mr.Numbers = numbers
@@ -81,50 +88,17 @@ func NewBadResponse(task, message string, numbers []int, code int) *BadResponse 
 }
 
 type ExtraFieldResponse struct {
-	Task    string   `json:"task"`
-	Numbers []int    `json:"numbers"`
-	Code    int      `json:"code"`
-	Message string   `json:"message"`
-	Fields  []string `json:"fields"`
+	BadResponse
+	Fields []string `json:"fields"`
 }
 
-func NewExtraFieldResponse(task, message string, numbers []int, code int, fields []string) *ExtraFieldResponse {
+func NewExtraFieldResponse(task, message string, numbers []interface{}, code int, fields []string) *ExtraFieldResponse {
 	mr := new(ExtraFieldResponse)
 	mr.Task = task
 	mr.Numbers = numbers
 	mr.Code = code
 	mr.Message = message
 	mr.Fields = fields
-	return mr
-}
-
-type Response interface{}
-
-type SavedMeanResponse struct {
-	Task    string  `json:"task"`
-	Numbers []int   `json:"numbers"`
-	Answer  float64 `json:"answer"`
-}
-
-func NewSavedMeanResponse(task string, numbers []int, answer float64) *SavedMeanResponse {
-	mr := new(SavedMeanResponse)
-	mr.Task = task
-	mr.Numbers = numbers
-	mr.Answer = answer
-	return mr
-}
-
-type SavedSortResponse struct {
-	Task    string `json:"task"`
-	Numbers []int  `json:"numbers"`
-	Answer  []int  `json:"answer"`
-}
-
-func NewSavedSortResponse(task string, numbers, answer []int) *SavedSortResponse {
-	mr := new(SavedSortResponse)
-	mr.Task = task
-	mr.Numbers = numbers
-	mr.Answer = answer
 	return mr
 }
 
@@ -143,13 +117,23 @@ func NewMethodError(method, message string, code int) *MethodError {
 }
 
 type Server struct {
-	Size    int        `json:"size"`
-	History []Response `json:"history"`
-	Code    int        `json:"code"`
-	Message string     `json:"message"`
+	Size    int           `json:"size"`
+	History []interface{} `json:"history"`
+	Code    int           `json:"code"`
+	Message string        `json:"message"`
 }
 
 var serverHistory Server
+
+func getStringValue(x interface{}) string {
+	var result string = ""
+	switch x.(type) {
+	case string:
+		return fmt.Sprintf("%v", x)
+	default:
+		return result
+	}
+}
 
 func getRequestBody(req *http.Request) string {
 	reqBody, err := ioutil.ReadAll(req.Body)
@@ -159,49 +143,56 @@ func getRequestBody(req *http.Request) string {
 	}
 	return string(reqBody)
 }
-func unmarshalRequest(w http.ResponseWriter, reqBody string) *Request {
-	var request *Request
+
+func unmarshalRequest(w http.ResponseWriter, reqBody string) *SliceRequest {
+	var request *SliceRequest
 	err := json.Unmarshal([]byte(reqBody), &request)
 	if err != nil {
-		//panic("Unmarshall error")
-		temp := unmarshalFloatRequest(w, reqBody)
-		if reflect.TypeOf(temp.Numbers) == reflect.TypeOf(reflect.Interface) {
-
-			fmt.Fprintln(w, reflect.TypeOf(temp.Numbers[0]))
-			if reflect.TypeOf(temp.Numbers[0]) != reflect.TypeOf(reflect.Int) {
-				fmt.Fprintln(w, "Type of numbers is unacceptable!")
-			}
-		} else {
-			request = nil
+		notSlice := unmarshalNotSliceRequest(w, reqBody)
+		if notSlice == nil {
+			return nil
 		}
-
+		temp := make([]interface{}, 1)
+		temp[0] = notSlice.Numbers
+		resp := NewBadResponse(getStringValue(notSlice.Task), typeErr, temp, http.StatusNotFound)
+		b, _ := json.Marshal(resp)
+		fmt.Fprintln(w, string(b))
+		return nil
 	}
 	return request
 }
 
-func unmarshalFloatRequest(w http.ResponseWriter, reqBody string) *FloatRequest {
-	var request *FloatRequest
+//
+func unmarshalNotSliceRequest(w http.ResponseWriter, reqBody string) *NotSliceRequest {
+	var request *NotSliceRequest
 	err := json.Unmarshal([]byte(reqBody), &request)
 	if err != nil {
-		fmt.Fprintln(w, "Type of numbers is unacceptable2222!")
-		//panic("Unmarshall error")
+		fmt.Fprintln(w, typeErr)
+
+		//temp := make([]interface{}, 1)
+		//temp[0] = notSlice.Numbers
+		//resp := NewBadResponse(notSlice.Task, "Type of numbers is unacceptable", temp, http.StatusNotFound)
+		//b, _ := json.Marshal(resp)
+		//fmt.Fprintln(w, string(b))
+
+		return nil
 	}
 	return request
 }
 
-func CalcMean(numbers []int) float64 {
+func CalcMean(numbers []interface{}) float64 {
 	sum := 0
 	for i := 0; i < len(numbers); i++ {
-		sum += numbers[i]
+		val := int(numbers[i].(float64))
+		sum += val
 	}
-	mean := float64(sum) / float64(len(numbers))
-	return mean
+	return float64(sum) / float64(len(numbers))
 }
 
 func writePostMethodError(w http.ResponseWriter, req *http.Request, code int, message string) {
 	reqBody := getRequestBody(req)
 	request := unmarshalRequest(w, reqBody)
-	resp := NewBadResponse(request.Task, message, request.Numbers, code)
+	resp := NewBadResponse(getStringValue(request.Task), message, request.Numbers, code)
 	b, _ := json.Marshal(resp)
 	fmt.Fprintln(w, string(b))
 }
@@ -218,6 +209,15 @@ func listOfKeys(X map[string]interface{}) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+func interfaceToInt(answer []interface{}) []int {
+	res := make([]int, len(answer))
+	for i := 0; i < len(answer); i++ {
+		iAreaId := int(answer[i].(float64))
+		res[i] = iAreaId
+	}
+	return res
 }
 
 func calculator(w http.ResponseWriter, req *http.Request) {
@@ -238,32 +238,38 @@ func calculator(w http.ResponseWriter, req *http.Request) {
 	delete(request.X, "numbers")
 
 	if len(request.X) > 0 {
-		resp := NewExtraFieldResponse(request.Task, extraFieldErr, request.Numbers, http.StatusNotFound, listOfKeys(request.X))
+		resp := NewExtraFieldResponse(getStringValue(request.Task), extraFieldErr, request.Numbers, http.StatusNotFound, listOfKeys(request.X))
 		b, _ := json.Marshal(resp)
 		fmt.Fprintln(w, string(b))
 		return
 	}
 
-	var savedResponse Response
+	var savedResponse *SavedResponse
 	var b []byte
 	if request.Task == "mean" {
 		mean := CalcMean(request.Numbers)
-		resp := NewMeanResponse(request.Task, taskDoneMSG, request.Numbers, mean, 200)
-		savedResponse = NewSavedMeanResponse(request.Task, request.Numbers, mean)
+		resp := NewResponse(getStringValue(request.Task), taskDoneMSG, request.Numbers, mean, 200)
+		savedResponse = NewSavedResponse(getStringValue(request.Task), request.Numbers, mean)
 		serverHistory.History = append(serverHistory.History, savedResponse)
 		b, _ = json.Marshal(resp)
 		fmt.Fprintln(w, string(b))
 	} else if request.Task == "sort" {
-		answer := make([]int, len(request.Numbers))
-		copy(answer, request.Numbers)
+		answerInterface := make([]interface{}, len(request.Numbers))
+		copy(answerInterface, request.Numbers)
+		answer := interfaceToInt(answerInterface)
 		sort.Ints(answer)
-		resp := NewSortResponse(request.Task, taskDoneMSG, request.Numbers, answer, 200)
-		savedResponse = NewSavedSortResponse(request.Task, request.Numbers, answer)
+		resp := NewResponse(getStringValue(request.Task), taskDoneMSG, request.Numbers, answer, 200)
+		savedResponse = NewSavedResponse(getStringValue(request.Task), request.Numbers, answer)
 		serverHistory.History = append(serverHistory.History, savedResponse)
 		b, _ = json.Marshal(resp)
 		fmt.Fprintln(w, string(b))
 	} else {
-		resp := NewBadResponse(request.Task, badTaskErr, request.Numbers, http.StatusNotFound)
+		message := typeErr
+		switch request.Task.(type) {
+		case string:
+			message = badTaskErr
+		}
+		resp := NewBadResponse(fmt.Sprintf("%v", request.Task), message, request.Numbers, http.StatusNotFound)
 		b, _ := json.Marshal(resp)
 		fmt.Fprintln(w, string(b))
 	}
